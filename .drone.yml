@@ -1,5 +1,55 @@
-pipeline:
-  build:
-    image: python:3.5.1-alpine
-    commands:
-      - echo test
+kind: pipeline
+name: default
+
+steps:
+- name: test
+  image: python:3.7.3-slim
+  environment:
+    CONTAINER_NAME: ctn-python3
+  commands:
+  - apt update
+  - apt install -y --no-install-recommends wget git docker
+  - wget --quiet https://github.com/hadolint/hadolint/releases/download/v1.16.3/hadolint-Linux-x86_64
+  - mv hadolint-Linux-x86_64 /usr/bin/hadolint
+  - chmod +x /usr/bin/*
+  - git clone https://github.com/jdxlabs/$CONTAINER_NAME.git
+  - cd $CONTAINER_NAME
+  - hadolint Dockerfile
+  when:
+    branch:
+    - master
+    - feature/*
+
+- name: build
+  image: python:3.7.3-slim
+  volumes:
+  - name: docker
+    path: /var/run/docker.sock
+  environment:
+    CONTAINER_NAME: ctn-python3
+    REGION: eu-west-1
+  commands:
+  - apt update
+  - apt install -y --no-install-recommends curl gnupg2 lsb-release software-properties-common apt-transport-https build-essential
+  - curl -fsSL https://download.docker.com/linux/debian/gpg | apt-key add -
+  - apt-key fingerprint 0EBFCD88
+  - add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/debian $(lsb_release -cs) stable"
+  - apt update
+  - apt install -y --no-install-recommends docker-ce docker-ce-cli containerd.io
+  - pip3 install awscli --upgrade
+  - make build
+  - AWS_ACCOUNT_ID=$(aws sts get-caller-identity --output text --query 'Account')
+  - AWS_ECR_REPOSITORY=$AWS_ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com
+  - eval $(aws ecr get-login --no-include-email --region=$REGION)
+  - docker tag "$CONTAINER_NAME" "$AWS_ECR_REPOSITORY/$CONTAINER_NAME:latest"
+  - docker push "$AWS_ECR_REPOSITORY/$CONTAINER_NAME:latest"
+  depends_on:
+  - test
+  when:
+    branch:
+    - master
+
+volumes:
+- name: docker
+  host:
+    path: /var/run/docker.sock
